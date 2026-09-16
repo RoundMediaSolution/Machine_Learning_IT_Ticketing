@@ -5,123 +5,97 @@ import re
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
+
+# ==============================================================================
+# 1. KONFIGURASI HALAMAN & CUSTOM CSS ENTERPRISE THEME
+# ==============================================================================
 st.set_page_config(
-    page_title="AutoTriage AI | IT Helpdesk",
+    page_title="JiraSmart - IT Triage Portal",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS untuk mempercantik UI seperti Web App Enterprise
+# Custom CSS untuk mempercantik antarmuka (Card styling, Fonts, Badge)
 st.markdown("""
 <style>
-    /* Import Google Font Inter */
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
-    
-    * {
-        font-family: 'Plus Jakarta Sans', sans-serif;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
     }
-    
-    /* Background & Main Padding */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-    }
-    
-    /* Hero Header Card */
-    .hero-card {
-        background: linear-gradient(135deg, #1E3A8A 0%, #3B82F6 100%);
-        border-radius: 16px;
-        padding: 30px;
+    .main-header {
+        background: linear-gradient(90deg, #1E3A8A 0%, #3B82F6 100%);
+        padding: 24px;
+        border-radius: 12px;
         color: white;
         margin-bottom: 25px;
-        box-shadow: 0 10px 25px -5px rgba(59, 130, 246, 0.3);
     }
-    .hero-title {
-        font-size: 28px;
-        font-weight: 700;
-        margin-bottom: 6px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    .hero-subtitle {
-        font-size: 15px;
-        opacity: 0.9;
-        font-weight: 400;
-    }
-    
-    /* Card Container */
-    .custom-card {
-        background: #ffffff;
-        border: 1px solid #E2E8F0;
-        border-radius: 14px;
-        padding: 24px;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-    }
-    
-    /* Priority Badges */
-    .badge {
-        display: inline-block;
-        padding: 6px 14px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 14px;
-        letter-spacing: 0.3px;
-    }
-    .badge-critical { background-color: #FEE2E2; color: #991B1B; border: 1px solid #F87171; }
-    .badge-high     { background-color: #FFEDD5; color: #9A3412; border: 1px solid #FB923C; }
-    .badge-medium   { background-color: #FEF9C3; color: #854D0E; border: 1px solid #FACC15; }
-    .badge-low      { background-color: #DCFCE7; color: #166534; border: 1px solid #4ADE80; }
-    
-    /* Metrics Box */
-    .metric-box {
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 12px;
+    .metric-card {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
         padding: 16px;
         text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-    .metric-value {
-        font-size: 22px;
-        font-weight: 700;
-        color: #0F172A;
-        margin-top: 4px;
-    }
-    .metric-label {
-        font-size: 12px;
-        font-weight: 600;
-        color: #64748B;
-        text-transform: uppercase;
-    }
+    .badge-very-high { background-color: #fee2e2; color: #dc2626; padding: 4px 10px; border-radius: 8px; font-weight: 700; }
+    .badge-high { background-color: #ffedd5; color: #ea580c; padding: 4px 10px; border-radius: 8px; font-weight: 700; }
+    .badge-medium { background-color: #fef9c3; color: #ca8a04; padding: 4px 10px; border-radius: 8px; font-weight: 700; }
+    .badge-low { background-color: #dcfce7; color: #16a34a; padding: 4px 10px; border-radius: 8px; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
+# ==============================================================================
+# 2. SESSION STATE & MANAJEMEN AUTENTIKASI ADMIN
+# ==============================================================================
+if "admin_logged_in" not in st.session_state:
+    st.session_state["admin_logged_in"] = False
+
+def login_admin(username, password):
+    # Kredensial Admin Sederhana (Bisa diganti atau ditaruh di secrets)
+    ADMIN_USER = "admin"
+    ADMIN_PASS = "admin123"
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        st.session_state["admin_logged_in"] = True
+        st.success("Login Berhasil sebagai IT Admin!")
+        st.rerun()
+    else:
+        st.error("Username atau Password Admin salah!")
+
+def logout_admin():
+    st.session_state["admin_logged_in"] = False
+    st.rerun()
+
+# ==============================================================================
+# 3. LOAD MODEL MACHINE LEARNING
+# ==============================================================================
 @st.cache_resource
-def load_model():
+def load_ml_models():
     return joblib.load('jira_ticket_system.pkl')
 
 try:
-    model_bundle = load_model()
+    model_bundle = load_ml_models()
     task_model = model_bundle['task_pipeline']
     prio_model = model_bundle['priority_pipeline']
 except Exception as e:
-    st.error(f"Artefak model gagal dimuat: {e}")
+    st.error(f"Gagal memuat artefak model ML. Error: {e}")
     st.stop()
 
-def get_google_sheet():
+# ==============================================================================
+# 4. KONEKSI GOOGLE SHEETS
+# ==============================================================================
+SPREADSHEET_NAME = "IT_Ticket_Database"
+
+def get_sheet_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     if "gcp_service_account" in st.secrets:
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
     else:
         creds = Credentials.from_service_account_file('credentials.json', scopes=scope)
     client = gspread.authorize(creds)
-    return client.open("IT_Ticket_Database").sheet1
+    return client.open(SPREADSHEET_NAME).sheet1
 
-def preprocess_text(text):
-    if not text:
-        return ""
+def clean_input_text(text):
     text = str(text)
     text = re.sub(r'\[.*?\|http.*?\]', ' ', text)
     text = re.sub(r'http\S+|www\S+', ' ', text)
@@ -129,141 +103,173 @@ def preprocess_text(text):
     text = re.sub(r'[^a-zA-Z\s]', ' ', text)
     return re.sub(r'\s+', ' ', text.lower()).strip()
 
+# ==============================================================================
+# 5. SIDEBAR: NAVIGASI & LOGIN PORTAL
+# ==============================================================================
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/9167/9167027.png", width=64)
-    st.title("AutoTriage Engine")
-    st.caption("AI-Powered Ticket Dispatcher v2.1")
-    st.divider()
-    
-    st.markdown("### 🟢 Status Sistem")
-    st.success("Model Status: **Active (NLP Pipeline)**")
-    st.info("Database: **Google Sheets Sync Live**")
-    
-    st.divider()
-    st.markdown("### ⏱️ Standar SLA Respon")
+    st.image("https://cdn-icons-png.flaticon.com/512/906/906343.png", width=60)
+    st.title("IT Operations")
+    st.caption("v2.1 • NLP-Powered ITSM Engine")
+    st.markdown("---")
+
+    menu_option = st.radio(
+        "Menu Navigasi:",
+        ["📝 Buat Tiket Baru", "🔒 Admin Workspace"],
+        index=0
+    )
+
+    st.markdown("---")
+    if st.session_state["admin_logged_in"]:
+        st.success("🟢 Sesi: **IT Administrator**")
+        if st.button("🚪 Logout Admin", use_container_width=True):
+            logout_admin()
+    else:
+        st.info("Status: **Karyawan / User**")
+
+# ==============================================================================
+# 6. MENU 1: USER PORTAL - SUBMIT TIKET
+# ==============================================================================
+if menu_option == "📝 Buat Tiket Baru":
+    # Header Modern
     st.markdown("""
-    - 🔴 **Very High:** $\le$ 1 Jam *(Critical)*
-    - 🟠 **High:** $\le$ 4 Jam *(Urgent)*
-    - 🟡 **Medium:** $\le$ 24 Jam *(Normal)*
-    - 🟢 **Low:** $\le$ 48 Jam *(Routine)*
-    """)
-    st.divider()
-    st.caption("Dikembangkan untuk Tugas Akhir Data Mining.")
+    <div class="main-header">
+        <h1 style='margin:0; font-size:28px;'>🎫 Layanan Bantuan IT & Otomatisasi Triage</h1>
+        <p style='margin:5px 0 0 0; opacity:0.85;'>Laporkan kendala teknis Anda. Model AI kami akan menentukan tipe task dan prioritas secara instan.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="hero-card">
-    <div class="hero-title">⚡ Intelligent IT Service Triage</div>
-    <div class="hero-subtitle">Otomatisasi pengelompokan jenis tugas (Task) dan penetapan prioritas SLA antrean tiket secara instan bertenaga Machine Learning.</div>
-</div>
-""", unsafe_allow_html=True)
+    with st.form("ticket_form", clear_on_submit=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            req_name = st.text_input("Nama Pelapor / Email Karyawan:", placeholder="contoh: andi.habibi@perusahaan.com")
+            dept = st.selectbox("Departemen Anda:", ["Operation", "Finance", "HR", "Sales", "Engineering", "General"])
+        with c2:
+            summary = st.text_input("Ringkasan Kendala (Subject):", placeholder="contoh: Gagal login ke VPN GlobalProtect")
 
+        description = st.text_area("Detail Keluhan Kendala:", placeholder="Sertakan kode error, link sistem, atau langkah yang sudah dicoba...", height=130)
+        
+        submitted = st.form_submit_button("🚀 Kirim Tiket Gangguan", use_container_width=True)
 
-tab1, tab2 = st.tabs(["🚀 Buat Tiket Baru (Live AI)", "📑 Database Tiket Masuk (Google Sheets)"])
+    if submitted:
+        if not summary or not description or not req_name:
+            st.warning("⚠️ Harap melengkapi semua kolom formulir!")
+        else:
+            with st.spinner("🤖 AI sedang memproses teks tiket & melakukan triage..."):
+                # Preprocessing & Inference
+                clean_text = clean_input_text(summary) + " " + clean_input_text(description) + " " + dept.lower()
+                pred_task = task_model.predict([clean_text])[0]
+                pred_prio = prio_model.predict([clean_text])[0]
+                conf = ((task_model.predict_proba([clean_text]).max() + prio_model.predict_proba([clean_text]).max()) / 2) * 100
 
-with tab1:
-    col_left, col_right = st.columns([3, 2], gap="large")
-    
-    with col_left:
-        st.markdown("### 📝 Form Pelaporan Masalah")
-        with st.container():
-            col_a, col_b = st.columns(2)
-            with col_a:
-                requestor = st.text_input("👤 Nama / Email Pemohon", placeholder="contoh: ardi.firmansyah@company.com")
-            with col_b:
-                department = st.selectbox("🏢 Departemen Asal", ["IT", "Human Resources", "Finance", "Operations", "Sales & Marketing", "General"])
-            
-            summary = st.text_input("📌 Judul Tiket (Summary)", placeholder="Ringkasan kendala (contoh: Database Timeout 504 di Aplikasi Kasir)")
-            description = st.text_area("📄 Rincian Kendala (Description)", height=150, placeholder="Jelaskan kronologi kendala, pesan error spesifik, atau kebutuhan akses...")
-            
-            submit = st.button("✨ Analisis & Terbitkan Tiket", use_container_width=True, type="primary")
+                # Penentuan badge & SLA
+                prio_badge_class = f"badge-{pred_prio.lower().replace(' ', '-')}"
+                sla_dict = {
+                    "Very High": "⚡ Kritis: Maksimal 1 Jam",
+                    "High": "⏳ Tinggi: Maksimal 4 Jam",
+                    "Medium": "🕒 Normal: Maksimal 24 Jam",
+                    "Low": "☕ Rendah: Maksimal 48 Jam"
+                }
 
-    with col_right:
-        st.markdown("### 🎯 Hasil Analisis AI")
-        if submit:
-            if not summary or not description:
-                st.warning("Silakan lengkapi judul dan deskripsi masalah terlebih dahulu!")
+                # Simpan ke Google Sheets
+                try:
+                    sheet = get_sheet_connection()
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    sheet.append_row([now, req_name, dept, summary, description, pred_task, pred_prio, f"{conf:.1f}%"])
+                    success_save = True
+                except Exception as e:
+                    success_save = False
+                    err_msg = str(e)
+
+            # Tampilan Hasil Triage yang Menarik (Kartu Hasil)
+            st.markdown("### 📋 Tiket Anda Berhasil Dibuat!")
+            r1, r2, r3 = st.columns(3)
+            with r1:
+                st.markdown(f"<div class='metric-card'><small>Kategori Tugas (Task)</small><h3>🎯 {pred_task}</h3></div>", unsafe_allow_html=True)
+            with r2:
+                st.markdown(f"<div class='metric-card'><small>Prioritas Ditentukan</small><h3><span class='{prio_badge_class}'>{pred_prio}</span></h3></div>", unsafe_allow_html=True)
+            with r3:
+                st.markdown(f"<div class='metric-card'><small>Target Response (SLA)</small><h4>{sla_dict.get(pred_prio, '-')}</h4></div>", unsafe_allow_html=True)
+
+            if success_save:
+                st.toast("✅ Tiket tersimpan otomatis di database Google Sheets!", icon="💾")
             else:
-                with st.spinner("NLP Model sedang memproses konteks teks..."):
-                    # Preprocess & Inferensi
-                    clean_input = preprocess_text(summary) + " " + preprocess_text(description) + " " + department.lower()
-                    pred_task = task_model.predict([clean_input])[0]
-                    pred_prio = prio_model.predict([clean_input])[0]
-                    
-                    conf_task = task_model.predict_proba([clean_input]).max() * 100
-                    conf_prio = prio_model.predict_proba([clean_input]).max() * 100
-                    avg_conf = (conf_task + conf_prio) / 2
-                    
-                    # Tentukan badge class
-                    badge_class = {
-                        "Very High": "badge-critical",
-                        "High": "badge-high",
-                        "Medium": "badge-medium",
-                        "Low": "badge-low"
-                    }.get(pred_prio, "badge-low")
-                    
-                    # Render Kartu Hasil Cantik
-                    st.markdown(f"""
-                    <div class="custom-card">
-                        <div style="font-size:13px; color:#64748B; font-weight:600; margin-bottom:8px;">HASIL PREDIKSI ENGINE</div>
-                        <div style="font-size:22px; font-weight:700; color:#1E293B; margin-bottom:16px;">
-                            🏷️ {pred_task}
-                        </div>
-                        <div style="margin-bottom:16px;">
-                            <span class="badge {badge_class}">Prioritas: {pred_prio.upper()}</span>
-                        </div>
-                        <hr style="border:none; border-top:1px solid #E2E8F0; margin: 15px 0;">
-                        <div style="display:flex; justify-content:space-between;">
-                            <div>
-                                <div style="font-size:12px; color:#64748B;">Keyakinan Model</div>
-                                <div style="font-size:18px; font-weight:700; color:#2563EB;">{avg_conf:.1f}%</div>
-                            </div>
-                            <div>
-                                <div style="font-size:12px; color:#64748B;">Target Respon</div>
-                                <div style="font-size:18px; font-weight:700; color:#0F172A;">
-                                    {"1 Jam" if pred_prio == "Very High" else "4 Jam" if pred_prio == "High" else "24 Jam"}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Simpan ke Google Sheets
-                    try:
-                        sheet = get_google_sheet()
-                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        sheet.append_row([now, requestor, department, summary, description, pred_task, pred_prio, f"{avg_conf:.1f}%"])
-                        st.toast("✅ Tiket tersimpan di Google Sheets!", icon="📥")
-                    except Exception as e:
-                        st.error(f"Gagal simpan ke database: {e}")
-        else:
-            st.info("Ketik laporan di formulir sebelah kiri dan klik tombol untuk melihat prediksi instan.")
+                st.error(f"Gagal mencatat tiket ke Google Sheet: {err_msg}")
 
-with tab2:
-    st.markdown("### 📊 Log Tiket Masuk di Cloud Database")
-    col_ref, col_info = st.columns([1, 4])
-    with col_ref:
-        if st.button("🔄 Sinkronkan Data", use_container_width=True):
-            st.experimental_rerun()
-            
-    try:
-        sheet = get_google_sheet()
-        records = sheet.get_all_records()
-        if records:
-            df_view = pd.DataFrame(records)
-            
-            # Tampilkan metrik ringkas di atas tabel
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                st.markdown(f'<div class="metric-box"><div class="metric-label">Total Tiket Masuk</div><div class="metric-value">{len(df_view)}</div></div>', unsafe_allow_html=True)
-            with m2:
-                critical_count = len(df_view[df_view['Pred_Priority'].isin(['Very High', 'High'])]) if 'Pred_Priority' in df_view else 0
-                st.markdown(f'<div class="metric-box"><div class="metric-label">Tiket Kritis (High/V.High)</div><div class="metric-value" style="color:#DC2626;">{critical_count}</div></div>', unsafe_allow_html=True)
-            with m3:
-                st.markdown(f'<div class="metric-box"><div class="metric-label">Koneksi Database</div><div class="metric-value" style="color:#16A34A;">Online</div></div>', unsafe_allow_html=True)
-            
-            st.write("")
-            st.dataframe(df_view, use_container_width=True)
-        else:
-            st.info("Database masih kosong.")
-    except Exception as e:
-        st.warning(f"Menunggu koneksi Google Sheets... ({e})")
+# ==============================================================================
+# 7. MENU 2: ADMIN WORKSPACE (RESTRICTED AREA)
+# ==============================================================================
+elif menu_option == "🔒 Admin Workspace":
+    # Form Login jika belum login
+    if not st.session_state["admin_logged_in"]:
+        st.subheader("🔐 Otentikasi IT Administrator")
+        st.write("Area ini dilindungi. Masukkan kredensial admin untuk melihat antrean tiket.")
+        
+        with st.form("login_box"):
+            u = st.text_input("Username:")
+            p = st.text_input("Password:", type="password")
+            btn_login = st.form_submit_button("Masuk ke Dashboard")
+            if btn_login:
+                login_admin(u, p)
+    else:
+        # Tampilan Admin yang Sudah Login
+        st.markdown("""
+        <div class="main-header" style="background: linear-gradient(90deg, #0F172A 0%, #334155 100%);">
+            <h1 style='margin:0; font-size:26px;'>🛡️ IT Support Command Center</h1>
+            <p style='margin:5px 0 0 0; opacity:0.85;'>Live monitoring antrean tiket, hasil triage machine learning, dan integrasi spreadsheet.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        try:
+            with st.spinner("Mengambil database dari Google Sheets..."):
+                sheet = get_sheet_connection()
+                records = sheet.get_all_records()
+                df_tickets = pd.DataFrame(records)
+
+            if not df_tickets.empty:
+                # 1. Summary Metrics
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    m1.metric("Total Tiket Masuk", len(df_tickets))
+                with m2:
+                    kritis_count = len(df_tickets[df_tickets['Pred_Priority'].str.contains("High", case=False, na=False)])
+                    m2.metric("Tiket High/Critical", kritis_count, delta="Perlu Tindakan", delta_color="inverse")
+                with m3:
+                    top_dept = df_tickets['Department'].mode()[0] if 'Department' in df_tickets.columns else "-"
+                    m3.metric("Departemen Teraktif", top_dept)
+                with m4:
+                    top_task = df_tickets['Pred_Task'].mode()[0] if 'Pred_Task' in df_tickets.columns else "-"
+                    m4.metric("Kategori Dominan", top_task)
+
+                st.markdown("---")
+
+                # 2. Tab Tampilan Data & Direct Google Sheets
+                subtab1, subtab2 = st.tabs(["📑 Tabel Antrean Real-Time", "🔗 Tautan Google Sheets Database"])
+                
+                with subtab1:
+                    st.subheader("Daftar Tiket Terklasifikasi Otomatis")
+                    st.dataframe(
+                        df_tickets.sort_values(by="Timestamp", ascending=False),
+                        use_container_width=True
+                    )
+                    
+                    # Opsi Download Data CSV
+                    csv_export = df_tickets.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Ekspor Database ke CSV",
+                        data=csv_export,
+                        file_name=f"it_tickets_export_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
+
+                with subtab2:
+                    st.subheader("Akses Langsung ke Dokumen Google Sheets")
+                    st.write("Semua data di atas disimpan langsung di lembar kerja Google Cloud berikut:")
+                    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet.spreadsheet.id}"
+                    st.link_button("🌐 Buka Langsung File Google Sheets", sheet_url)
+                    st.info("💡 Perubahan atau penghapusan baris yang Anda lakukan di file Google Sheets tersebut akan langsung terefleksi di aplikasi ini saat halaman di-refresh.")
+
+            else:
+                st.info("Database Google Sheets masih kosong. Belum ada tiket yang disubmit.")
+
+        except Exception as e:
+            st.error(f"Gagal mengambil data dari Google Sheets: {e}")
